@@ -16,7 +16,8 @@ from FusionMethods.ellipse_fusion_support import rot_matrix, to_matrix
 def error_and_plotting(m_res, l_res, w_res, al_res, m_prior, l_prior, w_prior, al_prior, m_meas, l_meas, w_meas,
                        al_meas, m_gt, l_gt, w_gt, al_gt, plotting, name, filename, est_color='red'):
     """
-    If demanded, plot ellipse prior, estimate, measurement, and ground truth and provide the error as GW and SR distance
+    If demanded, plot ellipse prior, estimate, measurement, and ground truth and provide the error as GW and ESR
+    distance.
     :param m_res:       Center of estimated ellipse
     :param l_res:       Semi-axis length of estimated ellipse
     :param w_res:       Semi-axis width of estimated ellipse
@@ -49,7 +50,7 @@ def error_and_plotting(m_res, l_res, w_res, al_res, m_prior, l_prior, w_prior, a
 
 def gauss_wasserstein(m_x, l_x, w_x, al_x, m_y, l_y, w_y, al_y):
     """
-    Calculate the Gaussian Wasserstein distance of two ellipses
+    Calculate the Gaussian Wasserstein distance of two ellipses.
     :param m_x:     Center of first ellipse
     :param l_x:     Semi-axis length of first ellipse
     :param w_x:     Semi-axis width of first ellipse
@@ -79,7 +80,7 @@ def gauss_wasserstein(m_x, l_x, w_x, al_x, m_y, l_y, w_y, al_y):
 
 def square_root_distance(m_x, l_x, w_x, al_x, m_y, l_y, w_y, al_y):
     """
-    Calculate the Square Root distance of two ellipses
+    Calculate the Extended Square Root distance of two ellipses.
     :param m_x:     Center of first ellipse
     :param l_x:     Semi-axis length of first ellipse
     :param w_x:     Semi-axis width of first ellipse
@@ -88,20 +89,20 @@ def square_root_distance(m_x, l_x, w_x, al_x, m_y, l_y, w_y, al_y):
     :param l_y:     Semi-axis length of second ellipse
     :param w_y:     Semi-axis width of second ellipse
     :param al_y:    Orientation of second ellipse
-    :return:        The Square Root distance of the two ellipses
+    :return:        The Extended Square Root distance of the two ellipses
     """
     x_rot = rot_matrix(al_x)
     y_rot = rot_matrix(al_y)
-    X_sqrt = np.dot(np.dot(x_rot, np.diag([l_x, w_x])), x_rot.T)
-    Y_sqrt = np.dot(np.dot(y_rot, np.diag([l_y, w_y])), y_rot.T)
+    x_sr = np.dot(np.dot(x_rot, np.diag([l_x, w_x])), x_rot.T)
+    y_sr = np.dot(np.dot(y_rot, np.diag([l_y, w_y])), y_rot.T)
 
-    return np.sum((m_x-m_y)**2) + np.sum((X_sqrt - Y_sqrt)**2)
+    return np.sum((m_x-m_y)**2) + np.sum((x_sr - y_sr)**2)
 
 
 def plot_ellipses(m_res, l_res, w_res, al_res, m_prior, l_prior, w_prior, al_prior, m_meas, l_meas, w_meas, al_meas,
                   m_gt, l_gt, w_gt, al_gt, name, filename, est_color='red'):
     """
-    Plot the estimated, prior, measured, and ground truth ellipses and save the plot
+    Plot the estimated, prior, measured, and ground truth ellipses and save the plot.
     :param m_res:       Center of estimated ellipse
     :param l_res:       Semi-axis length of estimated ellipse
     :param w_res:       Semi-axis width of estimated ellipse
@@ -146,7 +147,7 @@ def plot_ellipses(m_res, l_res, w_res, al_res, m_prior, l_prior, w_prior, al_pri
     el_res.set_ec(est_color)
     ax.add_artist(el_res)
 
-    plt.axis([-10, 10, -10, 10])
+    plt.axis([-10 + m_gt[0], 10 + m_gt[0], -10 + m_gt[1], 10 + m_gt[1]])
     ax.set_aspect('equal')
     ax.set_title(name)
     plt.xlabel('x in m')
@@ -158,7 +159,7 @@ def plot_ellipses(m_res, l_res, w_res, al_res, m_prior, l_prior, w_prior, al_pri
 def plot_error_bars(states, steps):
     """
     For each approach stored in states, plot the error of the first and last measurement step as a bar chart; error in
-    GW and SR distance
+    GW and ESR distance.
     :param states:  Contains names and errors of approaches; expects first steps entries of error to be in GW distance
                     and last steps entries in SR distance
     :param steps:   Number of measurement steps
@@ -189,7 +190,7 @@ def plot_error_bars(states, steps):
 
 def plot_convergence(states, steps, save_path):
     """
-    For each approach stored in states, plot the error convergence; error in GW and SR distance
+    For each approach stored in states, plot the error convergence with error in GW and ESR distance.
     :param states:      Contains names and errors of approaches; expects first steps entries of error to be in GW
                         distance and last steps entries in SR distance
     :param steps:       Number of measurement steps

@@ -6,172 +6,233 @@ Contains various ellipse fusion methods
 
 import numpy as np
 
-from FusionMethods.ellipse_fusion_support import particle_filter, mwdp_fusion, get_ellipse_params,\
-    get_ellipse_params_from_sr, single_particle_approx_gaussian, to_matrix
+from FusionMethods.ellipse_fusion_support import get_ellipse_params, get_ellipse_params_from_sr, to_matrix,\
+    single_particle_approx_gaussian, mmgw_estimate_from_particles, sample_m, turn_mult, reduce_mult, sample_mult
 from FusionMethods.error_and_plotting import error_and_plotting
 from FusionMethods.constants import *
 
 
-def mmsr_mc_update(mmsr_mc, meas, cov_meas, n_particles, gt, i, steps, plot_cond, save_path, use_pos):
+def mmgw_mc_update(mmgw_mc, meas, cov_meas, n_particles, gt, step_id, steps, plot_cond, save_path):
     """
-    Fusion using MMSR-MC; creates particle density in square root space of measurements and approximates it as a
-    Gaussian distribution to fuse it with the current estimate in Kalman fashion
-    :param mmsr_mc:     Current estimate (also stores error); will be modified as a result
-    :param meas:        Measurement in original state space
-    :param cov_meas:    Covariance of measurement in original state space
+    Fusion using MMGW-MC; creates particle density in square root space of measurements and approximates it as a
+    Gaussian distribution to fuse it with the current estimate in Kalman fashion.
+    :param mmgw_mc:     Current estimate (also stores error); will be modified as a result
+    :param meas:        Measurement in ellipse parameter space
+    :param cov_meas:    Covariance of measurement in ellipse parameter space
     :param n_particles: Number of particles used for approximating the transformed density
     :param gt:          Ground truth
-    :param i:           Current measurement step
+    :param step_id:     Current measurement step
     :param steps:       Total measurement steps
     :param plot_cond:   Boolean determining whether to plot the current estimate
     :param save_path:   Path to save the plots
-    :param use_pos:     If false, use particles only for shape parameters and fuse position in Kalman fashion
     """
+    # predict
+    mmgw_mc['x'] = np.dot(F, mmgw_mc['x'])
+    error_mat = np.array([
+        [0.5 * T ** 2, 0.0],
+        [0.0, 0.5 * T ** 2],
+        [0.0,          0.0],
+        [0.0,          0.0],
+        [0.0,          0.0],
+        [T, 0.0],
+        [0.0, T],
+    ])
+    error_cov = np.dot(np.dot(error_mat, np.diag([SIGMA_V1, SIGMA_V2]) ** 2), error_mat.T)
+    error_cov[SR, SR] = np.asarray(SIGMA_SHAPE) ** 2
+    mmgw_mc['cov'] = np.dot(np.dot(F, mmgw_mc['cov']), F.T) + error_cov
+
     # convert measurement
-    meas_sr, cov_meas_sr, particles_meas = single_particle_approx_gaussian(meas, cov_meas, n_particles, use_pos)
+    meas_sr, cov_meas_sr, particles_meas = single_particle_approx_gaussian(meas, cov_meas, n_particles)
 
     # store prior for plotting
-    m_prior = mmsr_mc['x'][M]
-    l_prior, w_prior, al_prior = get_ellipse_params_from_sr(mmsr_mc['x'][SR])
+    m_prior = mmgw_mc['x'][M]
+    al_prior, l_prior, w_prior = get_ellipse_params_from_sr(mmgw_mc['x'][SR])
 
     # Kalman fusion
-    S = mmsr_mc['cov'] + cov_meas_sr
-    K = np.dot(mmsr_mc['cov'], np.linalg.inv(S))
-    mmsr_mc['x'] = mmsr_mc['x'] + np.dot(K, meas_sr - mmsr_mc['x'])
-    mmsr_mc['cov'] = mmsr_mc['cov'] - np.dot(np.dot(K, S), K.T)
+    innov_cov = np.dot(np.dot(H, mmgw_mc['cov']), H.T) + cov_meas_sr
+    gain = np.dot(np.dot(mmgw_mc['cov'], H.T), np.linalg.inv(innov_cov))
+    mmgw_mc['x'] = mmgw_mc['x'] + np.dot(gain, meas_sr - np.dot(H, mmgw_mc['x']))
+    mmgw_mc['cov'] = mmgw_mc['cov'] - np.dot(np.dot(gain, innov_cov), gain.T)
 
     # save error and plot estimate
-    l_post_sr, w_post_sr, al_post_sr = get_ellipse_params_from_sr(mmsr_mc['x'][SR])
-    mmsr_mc['error'][i::steps] += error_and_plotting(mmsr_mc['x'][M], l_post_sr, w_post_sr, al_post_sr, m_prior,
-                                                     l_prior, w_prior, al_prior, meas[M], meas[L], meas[W], meas[AL],
-                                                     gt[M], gt[L], gt[W], gt[AL], plot_cond, 'MC Approximated Fusion',
-                                                     save_path + 'exampleMCApprox%i.svg' % i, est_color='green')
+    al_post_sr, l_post_sr, w_post_sr = get_ellipse_params_from_sr(mmgw_mc['x'][SR])
+    mmgw_mc['error'][step_id::steps] += error_and_plotting(mmgw_mc['x'][M], l_post_sr, w_post_sr, al_post_sr, m_prior,
+                                                           l_prior, w_prior, al_prior, meas[M], meas[L], meas[W],
+                                                           meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
+                                                           'MC Approximated Fusion',
+                                                           save_path + 'exampleMCApprox%i.svg' % step_id,
+                                                           est_color='green')
 
 
-def regular_update(regular, meas, cov_meas, gt, i, steps, plot_cond, save_path):
+def regular_update(regular, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw):
     """
-    Fuse estimate and measurement in original state space in Kalman fashion
+    Fuse estimate and measurement in original state space in Kalman fashion.
     :param regular:     Current estimate (also stores error); will be modified as a result
     :param meas:        Measurement in original state space
     :param cov_meas:    Covariance of measurement in original state space
     :param gt:          Ground truth
-    :param i:           Current measurement step
+    :param step_id:     Current measurement step
     :param steps:       Total measurement steps
     :param plot_cond:   Boolean determining whether to plot the current estimate
     :param save_path:   Path to save the plots
+    :param use_mmgw:    Use the MMGW instead of the ordinary estimate
     """
+    # predict
+    regular['x'] = np.dot(F, regular['x'])
+    error_mat = np.array([
+        [0.5 * T ** 2, 0.0],
+        [0.0, 0.5 * T ** 2],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [T, 0.0],
+        [0.0, T],
+    ])
+    error_cov = np.dot(np.dot(error_mat, np.diag([SIGMA_V1, SIGMA_V2]) ** 2), error_mat.T)
+    error_cov[SR, SR] = SIGMA_SHAPE ** 2
+    regular['cov'] = np.dot(np.dot(F, regular['cov']), F.T) + error_cov
+
     # store prior for plotting
-    all_prior = regular['x'].copy()
+    all_prior = regular['est'].copy()
 
     # Kalman fusion
-    S = regular['cov'] + cov_meas
-    K = np.dot(regular['cov'], np.linalg.inv(S))
-    regular['x'] = regular['x'] + np.dot(K, meas - regular['x'])
-    regular['cov'] = regular['cov'] - np.dot(np.dot(K, S), K.T)
+    innov = meas - np.dot(H, regular['x'])
+    innov[AL] = (innov[AL] + np.pi) % (2*np.pi) - np.pi
+    innov_cov = np.dot(np.dot(H, regular['cov']), H.T) + cov_meas
+    gain = np.dot(np.dot(regular['cov'], H.T), np.linalg.inv(innov_cov))
+    regular['x'] = regular['x'] + np.dot(gain, innov)
+    regular['cov'] = regular['cov'] - np.dot(np.dot(gain, innov_cov), gain.T)
+    if use_mmgw:
+        particles = sample_m(regular['x'], regular['cov'], False, N_PARTICLES_MMGW)
+        regular['est'] = mmgw_estimate_from_particles(particles)
+    else:
+        regular['est'] = regular['x'].copy()
 
     # save error and plot estimate
-    regular['error'][i::steps] += error_and_plotting(regular['x'][M], regular['x'][L], regular['x'][W],
-                                                     regular['x'][AL], all_prior[M], all_prior[L], all_prior[W],
-                                                     all_prior[AL], meas[M], meas[L], meas[W], meas[AL], gt[M], gt[L],
-                                                     gt[W], gt[AL], plot_cond, 'Fusion of Original State',
-                                                     save_path + 'exampleRegFus%i.svg' % i)
+    regular['error'][step_id::steps] += error_and_plotting(regular['est'][M], regular['est'][L], regular['est'][W],
+                                                           regular['est'][AL], all_prior[M], all_prior[L], all_prior[W],
+                                                           all_prior[AL], meas[M], meas[L], meas[W], meas[AL], gt[M],
+                                                           gt[L], gt[W], gt[AL], plot_cond, regular['name'],
+                                                           save_path + 'example' + regular['name'] + '%i.svg' % step_id)
 
 
-def mwdp_update(mwdp, meas, cov_meas, gt, i, steps, plot_cond, save_path):
+def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw):
     """
-    Fuse using MWDP; use likelihood to determine representation of ellipse in original state space with
-    smallest Euclidean distance weighted by uncertainties and fuse original state representations in Kalman fashion
-    using best representation
-    :param mwdp:        Current estimate (also stores error); will be modified as a result
-    :param meas:        Measurement in original state space
-    :param cov_meas:    Covariance of measurement in original state space
-    :param gt:          Ground truth
-    :param i:           Current measurement step
-    :param steps:       Total measurement steps
-    :param plot_cond:   Boolean determining whether to plot the current estimate
+    Method utilizing RED. Fuses the four components of the RED with orientation between
+    0 and 2pi with those of the measurement RED and applies mixture reduction on the resulting multi modal density. The
+    mean of the density is estimated by taking the mean of the highest weighted component or by using the MMGW
+    estimator.
+    :param red:         The state containing mean, covariance, etc.
+    :param meas:        Measurement
+    :param cov_meas:    Measurement covariance
+    :param gt:          Ground truth (for plotting and error calculation)
+    :param step_id:     Current step index (for plotting and error calculation)
+    :param steps:       Total number of steps
+    :param plot_cond:   Boolean for plotting the current time step
     :param save_path:   Path to save the plots
+    :param use_mmgw:    Use the MMGW instead of the highest weight estimate
     """
-    # store prior for plotting
-    all_prior = mwdp['x'].copy()
+    # predict
+    error_mat = np.array([
+        [0.5 * T ** 2, 0.0],
+        [0.0, 0.5 * T ** 2],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [T, 0.0],
+        [0.0, T],
+    ])
+    error_cov = np.dot(np.dot(error_mat, np.diag([SIGMA_V1, SIGMA_V2]) ** 2), error_mat.T)
+    error_cov[SR, SR] = SIGMA_SHAPE ** 2
+    for i in range(len(red['x'])):
+        red['x'][i] = np.dot(F, red['x'][i])
+        red['cov'][i] = np.dot(np.dot(F, red['cov'][i]), F.T) + error_cov
 
-    # Kalman fusion using best representation
-    [mwdp['x'], mwdp['cov'], k] = mwdp_fusion(mwdp['x'], mwdp['cov'], meas, cov_meas)
+    prior = red['est']
 
-    # save error and plot estimate
-    mwdp['error'][i::steps] += error_and_plotting(mwdp['x'][M], mwdp['x'][L], mwdp['x'][W], mwdp['x'][AL], all_prior[M],
-                                                  all_prior[L], all_prior[W], all_prior[AL], meas[M], meas[L], meas[W],
-                                                  meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond, 'Best Params',
-                                                  save_path + 'exampleBestParams%i.svg' % i)
+    # transform prior and measurement into reduced REDs
+    meas_mult, meas_cov_mult, meas_weights = turn_mult(meas, cov_meas)
+
+    # calculate posterior RED
+    post_mult = np.zeros((len(red['x']) * len(meas_mult), len(red['x'][0])))
+    post_cov_mult = np.zeros((len(red['x']) * len(meas_mult), len(red['x'][0]), len(red['x'][0])))
+    post_weights = np.zeros(len(red['x']) * len(meas_mult))
+    log_prior_weights = np.log(red['comp_weights'])
+    for i in range(len(red['x'])):
+        for j in range(len(meas_mult)):
+            nu = meas_mult[j] - np.dot(H, red['x'][i])
+            nu[AL] = (nu[AL] + np.pi) % (2 * np.pi) - np.pi
+            nu_cov = np.dot(np.dot(H, red['cov'][i]), H.T) + meas_cov_mult[j]
+            post_mult[i * len(meas_mult) + j] = red['x'][i] + np.dot(np.dot(np.dot(red['cov'][i], H.T),
+                                                                            np.linalg.inv(nu_cov)), nu)
+            post_cov_mult[i * len(meas_mult) + j] = red['cov'][i] - np.dot(np.dot(np.dot(red['cov'][i], H.T),
+                                                                                  np.linalg.inv(nu_cov)),
+                                                                           np.dot(H, red['cov'][i]))
+            post_weights[i * len(meas_mult) + j] = -2.5 * np.log(2 * np.pi) - 0.5 * np.log(np.linalg.det(nu_cov)) \
+                                                   - 0.5 * np.dot(np.dot(nu, np.linalg.inv(nu_cov)), nu)
+            post_weights[i * len(meas_mult) + j] += log_prior_weights[i]
+    post_weights -= np.log(np.sum(np.exp(post_weights)))
+    post_weights = np.exp(post_weights)
+
+    red['x'], red['cov'], red['comp_weights'] = reduce_mult(post_mult, post_cov_mult, post_weights)
+    if use_mmgw:
+        particles = sample_mult(post_mult, post_cov_mult, post_weights, N_PARTICLES_MMGW)
+        red['est'] = mmgw_estimate_from_particles(particles)
+    else:
+        red['est'] = red['x'][np.argmax(red['comp_weights'])].copy()
+
+    red['error'][step_id::steps] += error_and_plotting(red['est'][M], red['est'][L], red['est'][W], red['est'][AL],
+                                                       prior[M], prior[L], prior[W], prior[AL], meas[M], meas[L],
+                                                       meas[W], meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
+                                                       red['name'],
+                                                       save_path + 'example' + red['name'] + '%i.svg' % step_id)
 
 
-def rm_mean_update(rm_mean, meas, cov_meas, gt, i, steps, plot_cond, save_path):
+def shape_mean_update(shape_mean, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, tau=1.0):
     """
-    Treat ellipse estimates as random matrices having received an equal number of measurements and fuse as proposed by
-    K.  Granström  and  U.  Orguner,  “On  Spawning  and  Combination  of Extended/Group Targets Modeled With Random
-    Matrices,” IEEE Transactions on Signal Processing, vol. 61, no. 3, pp. 678–692, 2013.
-    :param rm_mean:     Current estimate (also stores error); will be modified as a result
-    :param meas:        Measurement in original state space (only m is used)
+    Treat ellipse estimates as random matrices having received an equal degree.
+    :param shape_mean:  Current estimate (also stores error); will be modified as a result
+    :param meas:        Measurement in original state space
     :param cov_meas:    Covariance of measurement in original state space (only m is used)
     :param gt:          Ground truth
-    :param i:           Current measurement step
+    :param step_id:     Current measurement step
     :param steps:       Total measurement steps
     :param plot_cond:   Boolean determining whether to plot the current estimate
     :param save_path:   Path to save the plots
+    :param tau:         forget parameter of prediction step
     """
+    # store prior for plotting
+    m_prior = shape_mean['x'][M]
+    al_prior, l_prior, w_prior = get_ellipse_params(shape_mean['shape'])
+
+    # predict
+    shape_mean['x'] = np.dot(F[KIN][:, KIN], shape_mean['x'])
+    error_mat = np.array([
+        [0.5 * T ** 2, 0.0],
+        [0.0, 0.5 * T ** 2],
+        [T, 0.0],
+        [0.0, T],
+    ])
+    error_cov = np.dot(np.dot(error_mat, np.diag([SIGMA_V1, SIGMA_V2]) ** 2), error_mat.T)
+    shape_mean['cov'] = np.dot(np.dot(F[KIN][:, KIN], shape_mean['cov']), F[KIN][:, KIN].T) + error_cov
+    shape_mean['gamma'] = 6.0 + np.exp(-T / tau)*(shape_mean['gamma'] - 6.0)
+
     # convert measurement
     shape_meas = to_matrix(meas[AL], meas[L], meas[W], False)
 
-    # store prior for plotting
-    m_prior = rm_mean['x'][M]
-    l_prior, w_prior, al_prior = get_ellipse_params(rm_mean['shape'])
-
     # Kalman fusion
-    S_k = rm_mean['cov'][:2, :2] + cov_meas[:2, :2]
-    K_k = np.dot(rm_mean['cov'][:2, :2], np.linalg.inv(S_k))
-    rm_mean['x'][M] = rm_mean['x'][M] + np.dot(K_k, meas[M] - rm_mean['x'][M])
-    rm_mean['cov'][:2, :2] = rm_mean['cov'][:2, :2] - np.dot(np.dot(K_k, S_k), K_k.T)
-    rm_mean['shape'] = (rm_mean['gamma'] * rm_mean['shape'] + shape_meas) / (rm_mean['gamma'] + 1.0) \
-                       + (rm_mean['gamma'] / (rm_mean['gamma'] + 1.0)**2) * np.outer(m_prior-meas[M], m_prior-meas[M])
-    rm_mean['gamma'] += 1
+    innov_cov_k = np.dot(np.dot(H_SHAPE, shape_mean['cov']), H_SHAPE.T) + cov_meas[KIN_MEAS][:, KIN_MEAS]
+    gain_k = np.dot(np.dot(shape_mean['cov'], H_SHAPE.T), np.linalg.inv(innov_cov_k))
+    shape_mean['x'] = shape_mean['x'] + np.dot(gain_k, meas[KIN_MEAS] - np.dot(H_SHAPE, shape_mean['x']))
+    shape_mean['cov'] = shape_mean['cov'] - np.dot(np.dot(gain_k, innov_cov_k), gain_k.T)
+    shape_mean['shape'] = (shape_mean['gamma'] * shape_mean['shape'] + 6.0 * shape_meas) / (shape_mean['gamma'] + 6.0)
+    shape_mean['gamma'] += 6.0
 
     # save error and plot estimate
-    l_post, w_post, al_post = get_ellipse_params(rm_mean['shape'])
-    rm_mean['error'][i::steps] += error_and_plotting(rm_mean['x'][M], l_post, w_post, al_post, m_prior, l_prior,
-                                                     w_prior, al_prior, meas[M], meas[L], meas[W], meas[AL], gt[M],
-                                                     gt[L], gt[W], gt[AL], plot_cond, 'RM Mean',
-                                                     save_path + 'exampleRMMean%i.svg' % i)
-
-
-def mmsr_pf_update(mmsr_pf, meas, cov_meas, particles_pf, n_particles_pf, gt, i, steps, plot_cond, save_path, use_pos):
-    """
-    Fuse using MMSR-PF; keep estimate in square root space as particle density and update the weights over time; for the
-    likelihood, the particles are transformed back and the sum of the likelihoods for all 4 possible representations is
-    used
-    :param mmsr_pf:         Current estimate (also stores error); will be modified as a result
-    :param meas:            Measurement in original state space
-    :param cov_meas:        Covariance of measurement in original state space
-    :param particles_pf:    The particles of the particle filter in square root space
-    :param n_particles_pf:  The number of particles
-    :param gt:              Ground truth
-    :param i:               Current measurement step
-    :param steps:           Total measurement steps
-    :param plot_cond:       Boolean determining whether to plot the current estimate
-    :param save_path:       Path to save the plots
-    :param use_pos:         If false, use particles only for shape parameters and fuse position in Kalman fashion
-    """
-    # store prior for plotting
-    m_prior = mmsr_pf['x'][M]
-    l_prior, w_prior, al_prior = get_ellipse_params_from_sr(mmsr_pf['x'][SR])
-
-    # use particle filter
-    mmsr_pf['x'], mmsr_pf['weights'], mmsr_pf['cov'][:2, :2] = particle_filter(particles_pf, mmsr_pf['weights'], meas,
-                                                                               cov_meas, n_particles_pf, 'sum',
-                                                                               mmsr_pf['x'][M], mmsr_pf['cov'][:2, :2],
-                                                                               use_pos)
-
-    # save error and plot estimate
-    l_post, w_post, al_post = get_ellipse_params_from_sr(mmsr_pf['x'][SR])
-    mmsr_pf['error'][i::steps] += error_and_plotting(mmsr_pf['x'][M], l_post, w_post, al_post, m_prior, l_prior,
-                                                     w_prior, al_prior, meas[M], meas[L], meas[W], meas[AL], gt[M],
-                                                     gt[L], gt[W], gt[AL], plot_cond, 'MMGW-PF',
-                                                     save_path + 'exampleMMGWPF%i.svg' % i, est_color='green')
+    al_post, l_post, w_post = get_ellipse_params(shape_mean['shape'])
+    shape_mean['error'][step_id::steps] += error_and_plotting(shape_mean['x'][M], l_post, w_post, al_post, m_prior,
+                                                              l_prior, w_prior, al_prior, meas[M], meas[L], meas[W],
+                                                              meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
+                                                              shape_mean['name'],
+                                                              save_path + 'example' + shape_mean['name'] + '%i.svg'
+                                                              % step_id)

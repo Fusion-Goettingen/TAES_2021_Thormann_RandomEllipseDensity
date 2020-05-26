@@ -6,15 +6,16 @@ Contains support functions for the ellipse fusion and test setup
 
 import numpy as np
 from numpy.random import multivariate_normal as mvn
-from scipy.linalg import inv, sqrtm
-from numpy.linalg import slogdet
+from scipy.linalg import sqrtm
+
+from sklearn.cluster import DBSCAN
 
 from FusionMethods.constants import *
 
 
 def rot_matrix(alpha):
     """
-    Calculates a rotation matrix based on the input orientation
+    Calculates a rotation matrix based on the input orientation.
     :param alpha:   Input orientation
     :return:        Rotation matrix for alpha
     """
@@ -27,12 +28,12 @@ def rot_matrix(alpha):
 
 def to_matrix(alpha, l, w, sr):
     """
-    Turn ellipse parameters into a matrix or square root matrix depending on sr parameter
+    Turn ellipse parameters into a matrix or square root matrix.
     :param alpha:   Orientation of the ellipse
     :param l:       Semi-axis length of the ellipse
     :param w:       Semi-axis width of the ellipse
     :param sr:      If True, square root matrix is calculated instead of shape matrix
-    :return:        Shape or square root matrix depending of sr
+    :return:        Shape or square root matrix
     """
     p = 1 if sr else 2
     rot = rot_matrix(alpha)
@@ -43,24 +44,43 @@ def to_matrix(alpha, l, w, sr):
         return np.dot(np.dot(rot, np.diag([l, w]) ** p), rot.T)
 
 
+def to_matrix_params(alpha, l, w, sr):
+    """
+    Turn ellipse parameters into a 3D vector containing the matrix or square root matrix elements
+    parameter.
+    :param alpha:   Orientation of the ellipse
+    :param l:       Semi-axis length of the ellipse
+    :param w:       Semi-axis width of the ellipse
+    :param sr:      If True, square root matrix is calculated instead of shape matrix
+    :return:        3D vector containing diagonal and corner of shape or square root matrix
+    """
+    rot = rot_matrix(alpha)
+    if len(rot.shape) == 3:
+        mats = to_matrix(alpha, l, w, sr)
+        return np.array([mats[:, 0, 0], mats[:, 0, 1], mats[:, 1, 1]]).T
+    else:
+        mat = to_matrix(alpha, l, w, sr)
+        return np.array([mat[0, 0], mat[0, 1], mat[1, 1]])
+
+
 def get_ellipse_params(ell):
     """
-    Calculate the ellipse semi-axis length and width and orientation based on shape matrix
+    Calculate the ellipse semi-axis length and width and orientation based on shape matrix.
     :param ell: Input ellipse as 2x2 shape matrix
     :return:    Semi-axis length, width and orientation of input ellipse
     """
     ellipse_axis, v = np.linalg.eig(ell)
     ellipse_axis = np.sqrt(ellipse_axis)
-    l = ellipse_axis[0]
-    w = ellipse_axis[1]
+    ax_l = ellipse_axis[0]
+    ax_w = ellipse_axis[1]
     al = np.arctan2(v[1, 0], v[0, 0])
 
-    return l, w, al
+    return al, ax_l, ax_w
 
 
 def get_ellipse_params_from_sr(sr):
     """
-    Calculate ellipse semi-axis length and width and orientation based on the elements of the square root matrix
+    Calculate ellipse semi-axis length and width and orientation based on the elements of the square root matrix.
     :param sr:  Elements of the square root matrix [top-left, corner, bottom-right]
     :return:    Semi-axis length, width and orientation of input square root matrix
     """
@@ -74,52 +94,38 @@ def get_ellipse_params_from_sr(sr):
     return get_ellipse_params(ell)
 
 
-def single_particle_approx_gaussian(prior, cov, n_particles, use_pos, sr=True):
+def single_particle_approx_gaussian(prior, cov, n_particles, sr=True):
     """
-    Calculate the particle density of the prior in square root space and approximate it as a Gaussian
+    Calculate the particle density of the prior in square root space and approximate it as a Gaussian.
     :param prior:       Prior in original state space
     :param cov:         Covariance of the prior
     :param n_particles: Number of particles used for particle approximation
-    :param use_pos:     Boolean to determine whether to create the particle cloud for the entire or only the shape state
     :param sr:          Utilize square root matrix or normal matrix for particles
     :return:            Approximated mean and covariance in square root space and the particle density
     """
-    vec_sr = np.zeros((n_particles, 5))
-
     particle = sample_m(prior, cov, False, n_particles)  # sample particles from the prior density
-    if not use_pos:
-        particle[:, M] = prior[M]
 
     # transform particles into square root space
     for i in range(n_particles):
         # calculate square root
-        Pa_sr = to_matrix(particle[i, AL], particle[i, L], particle[i, W], sr)
+        mat_sr = to_matrix(particle[i, AL], particle[i, L], particle[i, W], sr)
 
         # save transformed particle
-        vec_sr[i] = np.array([particle[i, 0], particle[i, 1], Pa_sr[0, 0], Pa_sr[0, 1], Pa_sr[1, 1]])
+        particle[i, SR] = np.array([mat_sr[0, 0], mat_sr[0, 1], mat_sr[1, 1]])
 
     # calculate mean and variance of particle density
-    if use_pos:
-        mean_sr = np.sum(vec_sr, axis=0) / n_particles
-        var_sr = np.sum(np.einsum('xa, xb -> xab', vec_sr - mean_sr, vec_sr - mean_sr), axis=0) / n_particles
-    else:
-        mean_sr = np.zeros(5)
-        var_sr = np.zeros((5, 5))
-        mean_sr[M] = prior[M]
-        var_sr[:2, :2] = cov[:2, :2]
-        mean_sr[SR] = np.sum(vec_sr[:, SR], axis=0) / n_particles
-        var_sr[2:, 2:] = np.sum(np.einsum('xa, xb -> xab', vec_sr[:, SR] - mean_sr[SR], vec_sr[:, SR] - mean_sr[SR]),
-                                axis=0) / n_particles
+    mean_sr = np.sum(particle, axis=0) / n_particles
+    var_sr = np.sum(np.einsum('xa, xb -> xab', particle - mean_sr, particle - mean_sr), axis=0) / n_particles
     var_sr += var_sr.T
     var_sr *= 0.5
 
-    return mean_sr, var_sr, vec_sr
+    return mean_sr, var_sr, particle
 
 
 def sample_m(mean, cov, shift, amount):
     """
-    Create one or multiple samples
-    :param mean:    Mean from which to sample
+    Create samples from input density.
+    :param mean:    Mean with which to sample
     :param cov:     Covariance with which to sample
     :param shift:   Boolean to determine whether to shift the orientation
     :param amount:  Number of samples to be drawn
@@ -148,189 +154,156 @@ def sample_m(mean, cov, shift, amount):
     return samp
 
 
-def particle_filter(prior, w, meas, cov_meas, n_particles, ll_type, m_prior, cov_m, use_pos):
+def mmgw_estimate_from_particles(particles):
     """
-    Update the particle cloud's (in SR space) weights based on a measurement in original state space; no resampling
-    :param prior:       Prior particle density in SR space (shape space if use_bary is True)
-    :param w:           Prior weights
-    :param meas:        Measured ellipse in original state space
-    :param cov_meas:    Covariance of measurement in original state space
-    :param n_particles: Number of particles to be sampled from the Gaussian input density
-    :param ll_type:     Either 'sum' for using the sum of the 4 representations' likelihood or 'max' for using the
-                        maximum
-    :param m_prior:     Prior of position parameters (only used if use_pos is false)
-    :param cov_m:       Covariance of position parameters (only used if use_pos is false)
-    :param use_pos:     If false, use particles only for shape parameters and fuse position in Kalman fashion
-    :return:            Weighted mean of the particles and updated weights
+    Calculate the MMGW estimate of a particle density in ellipse parameter space.
+    :param particles:   particle density in ellipse parameter space
+    :return:            MMGW estimate in ellipse parameter space
     """
+    particles[:, SR] = to_matrix_params(particles[:, AL], particles[:, L], particles[:, W], True)
+    est = np.mean(particles, axis=0)
+    est[SR] = get_ellipse_params_from_sr(est[SR])
+    return est
 
-    meas_mm, cov_meas_mm = turn_to_multi_modal(meas, cov_meas)
-    # calculate inverse and determinant of measurement covariance assuming independent measurement dimensions
-    # if use_pos:
-    #     cov_meas_inv = np.diag(1.0 / cov_meas.diagonal())
-    #     cov_meas_det = np.linalg.det(cov_meas)
-    # else:
-    #     cov_meas_inv = np.diag(1.0 / cov_meas[2:, 2:].diagonal())
-    #     cov_meas_det = np.linalg.det(cov_meas[2:, 2:])
-    if use_pos:
-        cov_meas_inv = np.zeros(cov_meas_mm.shape)
-        cov_meas_det = np.zeros(len(cov_meas_mm))
+
+def turn_mult(x, cov):
+    """
+    Turn the input density into a RED approximation with 4 components by splitting it in the four different orientations
+    possible between -pi and pi describing the same ellipse.
+    :param x:   the input ellipse mean, parameterized with center, orientation, and semi-axes (optional velocities)
+    :param cov: the input covariance
+    :return:    multimodal Gaussian density with 4 components, including means, covariances, and weights
+    """
+    x_mult = np.zeros((4, len(x)))
+    cov_mult = np.zeros((4, len(x), len(x)))
+
+    x_mult[0] = np.copy(x)
+    cov_mult[0] = np.copy(cov)
+    for i in range(1, 4):
+        x_mult[i, M] = x[M]
+        x_mult[i, AL] += x[AL] + i * 0.5 * np.pi
+        x_mult[i, AL] = (x_mult[i, AL] + np.pi) % (2 * np.pi) - np.pi
+        x_mult[i, L] = x_mult[i - 1, W]
+        x_mult[i, W] = x_mult[i - 1, L]
+        if len(x) > 5:
+            x_mult[i, V] = x[V]
+        cov_mult[i] = np.copy(cov)
+        cov_mult[i, L, :3] = cov_mult[i - 1, W, :3]
+        cov_mult[i, W, :3] = cov_mult[i - 1, L, :3]
+        cov_mult[i, :3, L] = cov_mult[i - 1, :3, W]
+        cov_mult[i, :3, W] = cov_mult[i - 1, :3, L]
+        cov_mult[i, L, L] = cov_mult[i - 1, W, W]
+        cov_mult[i, W, W] = cov_mult[i - 1, L, L]
+        if len(x) > 5:
+            cov_mult[i, L, 5:] = cov_mult[i - 1, W, 5:]
+            cov_mult[i, W, 5:] = cov_mult[i - 1, L, 5:]
+            cov_mult[i, 5:, L] = cov_mult[i - 1, 5:, W]
+            cov_mult[i, 5:, W] = cov_mult[i - 1, 5:, L]
+
+    w = 0.25 * np.ones(4)
+
+    return x_mult, cov_mult, w
+
+
+def sample_mult(x, cov, w, n_samples):
+    """
+    Sample from a multimodal Gaussian density.
+    :param x:           the components' means
+    :param cov:         the components' covariances
+    :param w:           the components' weights
+    :param n_samples:   the number of samples to be drawn
+    :return:            the samples
+    """
+    # sample the components with repetition
+    chosen = np.random.choice(len(x), n_samples, True, p=w)
+
+    # sample from the respective components
+    samples = np.zeros((n_samples, len(x[0])))
+    for i in range(len(x)):
+        if np.sum(chosen == i) > 0:
+            samples[chosen == i] = mvn(x[i], cov[i], np.sum(chosen == i))
+
+    return samples
+
+
+def reduce_mult(means, covs, w):
+    """
+    Reduce mixture density by removing unlikely components and merging close components.
+    :param means:   set of means
+    :param covs:    set of covariances
+    :param w:       weights of the components
+    :return:        reduced set of component means, covariances, and weights
+    """
+    if len(means.shape) == 2:
+        x_dim = len(means[0])
     else:
-        cov_meas_inv = np.zeros(cov_meas_mm[:, 2:, 2:].shape)
-        cov_meas_det = np.zeros(len(cov_meas_mm))
-    for i in range(4):
-        if use_pos:
-            cov_meas_inv[i] = np.diag(1.0 / cov_meas_mm[i].diagonal())
-            cov_meas_det[i] = np.linalg.det(cov_meas_mm[i])
+        x_dim = len(means)
+    means_red, covs_red, w_red = means.copy(), covs.copy(), w.copy()
+
+    # remove unlikely components
+    keep = np.atleast_1d(w_red > WEIGHT_THRESH)
+    if not any(keep):  # keep most likely component as we assume the target always exists
+        keep[np.argmax(w_red)] = True
+        means_red, covs_red, w_red = means_red[keep], covs_red[keep], w_red[keep]
+        w_red /= np.sum(w_red)
+        return means_red, covs_red, w_red
+
+    means_red, covs_red, w_red = means_red[keep], covs_red[keep], w_red[keep]
+
+    # merging
+    nus = means_red[:, None, :] - means_red[None, :, :]
+    inn_covs = covs_red[:, None, :, :] + covs_red[None, :, :, :]
+    dists = np.einsum('xya, xyab, xyb -> xy', nus, np.linalg.inv(inn_covs), nus)
+    db = DBSCAN(eps=CLOSE_THRESH, min_samples=1, metric='precomputed').fit(dists)
+    labels = np.unique(db.labels_)
+    means_merged = np.zeros((len(labels), x_dim))
+    covs_merged = np.zeros((len(labels), x_dim, x_dim))
+    w_merged = np.zeros(len(labels))
+    for i in range(len(labels)):
+        in_cluster = db.labels_ == i
+        if np.sum(in_cluster) > 1:
+            w_merged[i] = np.sum(w_red[in_cluster])
+            means_merged[i] = np.sum(w_red[in_cluster, None] * means_red[in_cluster], axis=0) / w_merged[i]
+            covs_merged[i] = np.sum(w_red[in_cluster, None, None]
+                                    * (np.einsum('xa, xb -> xab', means_red[in_cluster], means_red[in_cluster])
+                                       + covs_red[in_cluster]), axis=0) / w_merged[i] - np.outer(means_merged[i],
+                                                                                                 means_merged[i])
         else:
-            cov_meas_inv[i] = np.diag(1.0 / cov_meas_mm[i, 2:, 2:].diagonal())
-            cov_meas_det[i] = np.linalg.det(cov_meas_mm[i, 2:, 2:])
+            w_merged[i] = w_red[in_cluster]
+            means_merged[i] = means_red[in_cluster]
+            covs_merged[i] = covs_red[in_cluster]
 
-    # update weights with likelihood
-    for i in range(n_particles):
-        w[i] *= sr_likelihood(prior[i], cov_meas_inv[0], cov_meas_det[0], meas_mm[0], ll_type)
-    w /= np.sum(w)
+    close_thresh = CLOSE_THRESH
+    while len(w_merged) > MAX_COMP:
+        w_red = w_merged.copy()
+        means_red = means_merged.copy()
+        covs_red = covs_merged.copy()
 
-    # calculate weighted mean with updated particle weights
-    post_mean = np.sum(w[:, None] * prior, axis=0)
+        close_thresh += 0.05
+        nus = means_red[:, None, :] - means_red[None, :, :]
+        inn_covs = covs_red[:, None, :, :] + covs_red[None, :, :, :]
+        dists = np.einsum('xya, xyab, xyb -> xy', nus, np.linalg.inv(inn_covs), nus)
+        db = DBSCAN(eps=close_thresh, min_samples=1, metric='precomputed').fit(dists)
+        labels = np.unique(db.labels_)
+        means_merged = np.zeros((len(labels), x_dim))
+        covs_merged = np.zeros((len(labels), x_dim, x_dim))
+        w_merged = np.zeros(len(labels))
+        for i in range(len(labels)):
+            in_cluster = db.labels_ == i
+            if np.sum(in_cluster) > 1:
+                w_merged[i] = np.sum(w_red[in_cluster])
+                means_merged[i] = np.sum(w_red[in_cluster, None] * means_red[in_cluster], axis=0) / w_merged[i]
+                covs_merged[i] = np.sum(w_red[in_cluster, None, None]
+                                        * (np.einsum('xa, xb -> xab', means_red[in_cluster] - means_merged[i],
+                                                     means_red[in_cluster] - means_merged[i])
+                                           + covs_red[in_cluster]), axis=0) / w_merged[i]
+            else:
+                w_merged[i] = w_red[in_cluster]
+                means_merged[i] = means_red[in_cluster]
+                covs_merged[i] = covs_red[in_cluster]
+    w_merged /= np.sum(w_merged)
 
-    if not use_pos:
-        S = cov_meas[:2, :2] + cov_m
-        K = np.dot(cov_m, inv(S))
-        post_mean[M] = m_prior + np.dot(K, meas[M] - m_prior)
-        cov_m = cov_m - np.dot(np.dot(K, S), K.T)
-
-    return post_mean, w, cov_m
-
-
-def sr_likelihood(x, cov_inv, cov_det, meas, ll_type):
-    """
-    Calculate the likelihood of a particle in SR space given a measurement in original state space
-    :param x:       The particle in SR space
-    :param cov_inv: Inverse of measurement covariance
-    :param cov_det: Determinant of measurement covariance
-    :param meas:    Measurement in original state space
-    :param ll_type: Either 'sum' for using the sum of the 4 representations' likelihood or 'max' for using the maximum
-    :return:        Depedning on ll_type the sum or maximum of the likelihoods or 0 for an invalid ll_type
-    """
-    # transform particle to original state space
-    x_el = np.zeros(5)
-    x_el[:2] = x[:2]
-    x_shape = np.array([
-        [x[2], x[3]],
-        [x[3], x[4]],
-    ])
-    x_shape = np.dot(x_shape, x_shape)
-    l, w, al = get_ellipse_params(x_shape)
-    x_el[2] = al - 0.5*np.pi
-    x_el[2] %= 2.0*np.pi
-    x_el[3] = w
-    x_el[4] = l
-
-    ll = np.zeros(4)
-
-    # calculate likelihood for all 4 representations in original state space
-    for i in range(4):
-        save = x_el[3]
-        x_el[3] = x_el[4]
-        x_el[4] = save
-        x_el[2] += 0.5*np.pi
-        x_el[2] %= 2.0*np.pi
-
-        nu = meas - x_el
-        nu[2] = ((nu[2] + np.pi) % (2*np.pi)) - np.pi
-
-        if len(cov_inv) == 5:
-            ll[i] = np.exp(-0.5*np.dot(np.dot(nu, cov_inv), nu)) / np.sqrt(32*np.pi**5*cov_det)
-        else:
-            ll[i] = np.exp(-0.5 * np.dot(np.dot(nu[2:], cov_inv), nu[2:])) / np.sqrt(8 * np.pi ** 3 * cov_det)
-
-    # return sum or maximum depending on ll_type
-    if ll_type == 'sum':
-        return np.sum(ll)
-    elif ll_type == 'max':
-        return np.max(ll)
-    else:
-        print('Invalid likelihood type')
-        return 0
-
-
-def mwdp_fusion(prior, cov_prior, meas, cov_meas):
-    """
-    Fuse ellipses A and B in original state space using representation with highest likelihood; assumes independent
-    measurement dimensions for the switch of covariance elements
-    :param prior:       Prior ellipse in original state space
-    :param cov_prior:   Covariance of prior ellipse
-    :param meas:        Measured ellipse in original state space
-    :param cov_meas:    Covariance of measured ellipse
-    :return:            Mean and covariance of fusion with highest likelihood representation and number of 90 degree
-                        shifts of ellipse B to get highest likelihood representation
-    """
-    res_orig_alt_rots = np.zeros((4, 5))
-    res_orig_alt_rots_cov = np.zeros((4, 5, 5))
-    res_orig_log_lik = np.zeros(4)
-    innov = np.zeros((4, 5))
-    meas_alt = np.zeros(5)
-    meas_alt[M] = meas[M]
-
-    # test all 4 representations
-    for k in range(4):
-        # shift orientation and if necessary switch semi-axis in mean and orientation
-        meas_alt[AL] = (meas[AL] + k * np.pi * 0.5) % (2 * np.pi)
-        if k % 2 != 0:
-            meas_alt[L] = meas[W]
-            meas_alt[W] = meas[L]
-            cov_meas_alt = np.copy(cov_meas)
-            cov_meas_alt[3, 3] = cov_meas[4, 4]
-            cov_meas_alt[4, 4] = cov_meas[3, 3]
-        else:
-            meas_alt[L] = meas[L]
-            meas_alt[W] = meas[W]
-            cov_meas_alt = np.copy(cov_meas)
-
-        # Kalman update
-        S_orig_alt = cov_prior + cov_meas_alt
-        K_orig_alt = np.dot(cov_prior, np.linalg.inv(S_orig_alt))
-        innov[k] = meas_alt - prior
-        # use shorter angle difference
-        innov[k, 2] = ((innov[k, 2] + np.pi) % (2*np.pi)) - np.pi
-        res_orig_alt_rots[k] = prior + np.dot(K_orig_alt, innov[k])
-        res_orig_alt_rots_cov[k] = cov_prior - np.dot(np.dot(K_orig_alt, S_orig_alt), K_orig_alt.T)
-
-        # calculate log-likelihood
-        res_orig_log_lik[k] = -0.5 * np.dot(np.dot(innov[k], inv(S_orig_alt)), innov[k])
-        sign, logdet_inv = slogdet(inv(S_orig_alt))
-        res_orig_log_lik[k] += 0.5 * logdet_inv - 2.5 * np.log(2 * np.pi)
-
-    return res_orig_alt_rots[np.argmax(res_orig_log_lik)], res_orig_alt_rots_cov[np.argmax(res_orig_log_lik)],\
-           np.argmax(res_orig_log_lik)
-
-
-def get_jacobian(l, w, al):
-    """
-    Jacobian calculation of square root function for positive semi-definite matrices with eigenvalues l and w and
-    rotation matrix with orientation al
-    :param l:   Semi-axis length of original representation
-    :param w:   Semi-axis width of original representation
-    :param al:  Orientation of original representation
-    :return:    Jacobian of square root transformation
-    """
-    jac = np.zeros((5, 5))
-    jac[:2, :2] = np.eye(2)
-
-    jac[2, 2] = 2 * np.cos(al) * np.sin(al) * (w - l)
-    jac[2, 3] = np.cos(al)**2
-    jac[2, 4] = np.sin(al)**2
-
-    jac[3, 2] = (l - w) * (np.cos(al)**2 - np.sin(al)**2)
-    jac[3, 3] = np.sin(al) * np.cos(al)
-    jac[3, 4] = -np.sin(al) * np.cos(al)
-
-    jac[4, 2] = 2 * np.cos(al) * np.sin(al) * (l - w)
-    jac[4, 3] = np.sin(al)**2
-    jac[4, 4] = np.cos(al)**2
-
-    return jac
+    return means_merged, covs_merged, w_merged
 
 
 def barycenter(particles, w, n_particles, particles_sr=np.zeros(0)):
@@ -387,28 +360,3 @@ def barycenter(particles, w, n_particles, particles_sr=np.zeros(0)):
     result[4] = bary[1, 1]
 
     return result
-
-
-def turn_to_multi_modal(mean, cov):
-    """
-    Turns an ellipse estimate in original state space into a multi modal density consisting of 4 components, one for
-    each way of representing the same ellipse (reducing the number of possibilities to 4 utilizing the 2pi periodity of
-    the orientation).
-    :param mean:    Mean of the density
-    :param cov:     Covariance of the density
-    :return:        Means and covariances of all 4 modes
-    """
-    mmsr_mult_mean = np.zeros((4, 5))
-    mmsr_mult_cov = np.zeros((4, 5, 5))
-    mmsr_mult_mean[0] = mean.copy()
-    mmsr_mult_cov[0] = cov.copy()
-    for i in range(1, 4):
-        mmsr_mult_mean[i, :2] = mmsr_mult_mean[i - 1, :2]
-        mmsr_mult_mean[i, 2] = (mmsr_mult_mean[i - 1, 2] + 0.5 * np.pi) % (2 * np.pi)
-        mmsr_mult_mean[i, 3] = mmsr_mult_mean[i - 1, 4]
-        mmsr_mult_mean[i, 4] = mmsr_mult_mean[i - 1, 3]
-        mmsr_mult_cov[i, :3, :3] = mmsr_mult_cov[i - 1, :3, :3]
-        mmsr_mult_cov[i, 3, 3] = mmsr_mult_cov[i - 1, 4, 4]
-        mmsr_mult_cov[i, 4, 4] = mmsr_mult_cov[i - 1, 3, 3]
-
-    return mmsr_mult_mean, mmsr_mult_cov
