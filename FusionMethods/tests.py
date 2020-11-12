@@ -29,6 +29,8 @@ state_dtype = np.dtype([
     ('gamma', 'i4'),          # for RM mean, keep track of number of measurements
     ('name', 'O'),            # name of the fusion method
     ('color', 'O'),           # color for error plotting
+    ('figure', 'O'),          # figure for plotting
+    ('axes', 'O'),            # axes for plotting
 ])
 
 
@@ -49,7 +51,7 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
     # setup state for various ellipse fusion methods
     mmgw_mc = np.zeros(1, dtype=state_dtype)
     mmgw_mc[0]['error'] = error.copy()
-    mmgw_mc[0]['name'] = 'MMGW-MC'
+    mmgw_mc[0]['name'] = 'MC-MMGW'
     mmgw_mc[0]['color'] = 'cyan'
     regular = np.zeros(1, dtype=state_dtype)
     regular[0]['error'] = error.copy()
@@ -59,14 +61,10 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
     regular_mmgw[0]['error'] = error.copy()
     regular_mmgw[0]['name'] = 'Regular-MMGW'
     regular_mmgw[0]['color'] = 'orange'
-    red_mwdp = np.zeros(1, dtype=state_dtype)
-    red_mwdp[0]['error'] = error.copy()
-    red_mwdp[0]['name'] = 'RED-MWDP'
-    red_mwdp[0]['color'] = 'green'
     red_mmgw = np.zeros(1, dtype=state_dtype)
     red_mmgw[0]['error'] = error.copy()
     red_mmgw[0]['name'] = 'RED-MMGW'
-    red_mmgw[0]['color'] = 'lightgreen'
+    red_mmgw[0]['color'] = 'green'
     shape_mean = np.zeros(1, dtype=state_dtype)
     shape_mean[0]['error'] = error.copy()
     shape_mean[0]['name'] = 'Shape-Mean'
@@ -87,34 +85,37 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
                                                                                            N_PARTICLES_MMGW)
         mmgw_mc[0]['est'] = mmgw_mc[0]['x'].copy()
         mmgw_mc[0]['est'][SR] = get_ellipse_params_from_sr(mmgw_mc[0]['x'][SR])
+        mmgw_mc[0]['figure'], mmgw_mc[0]['axes'] = plt.subplots(1, 1)
 
         # get prior for regular state
         regular[0]['x'] = prior.copy()
         regular[0]['cov'] = cov_prior.copy()
         regular[0]['est'] = prior.copy()
+        regular[0]['figure'], regular[0]['axes'] = plt.subplots(1, 1)
         regular_mmgw[0]['x'] = prior.copy()
         regular_mmgw[0]['cov'] = cov_prior.copy()
         particles = sample_m(regular_mmgw[0]['x'], regular_mmgw[0]['cov'], False, N_PARTICLES_MMGW)
         regular_mmgw[0]['est'] = mmgw_estimate_from_particles(particles)
+        regular_mmgw[0]['figure'], regular_mmgw[0]['axes'] = plt.subplots(1, 1)
 
         # get prior for red
-        red_mwdp[0]['x'], red_mwdp[0]['cov'], red_mwdp[0]['comp_weights'] = turn_mult(prior.copy(), cov_prior.copy())
-        red_mwdp[0]['est'] = prior.copy()
         red_mmgw[0]['x'], red_mmgw[0]['cov'], red_mmgw[0]['comp_weights'] = turn_mult(prior.copy(), cov_prior.copy())
         particles = sample_mult(red_mmgw[0]['x'], red_mmgw[0]['cov'], red_mmgw[0]['comp_weights'], N_PARTICLES_MMGW)
         red_mmgw[0]['est'] = mmgw_estimate_from_particles(particles)
+        red_mmgw[0]['figure'], red_mmgw[0]['axes'] = plt.subplots(1, 1)
 
         # get prior for RM mean
         shape_mean[0]['x'] = prior[KIN]
         shape_mean[0]['shape'] = to_matrix(prior[AL], prior[L], prior[W], False)
         shape_mean[0]['cov'] = cov_prior[KIN][:, KIN]
         shape_mean[0]['gamma'] = 6.0
+        shape_mean[0]['figure'], shape_mean[0]['axes'] = plt.subplots(1, 1)
 
         # test different methods
         for i in range(steps):
             if i % 10 == 0:
                 print('Step %i of %i' % (i + 1, steps))
-            plot_cond = (r + 1 == runs) & (i + 1 == steps)
+            plot_cond = (r + 1 == runs) & ((i % 2) == 1)  # & (i + 1 == steps)
 
             # move ground truth
             gt = np.dot(F, gt)
@@ -139,29 +140,32 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
             meas = sample_m(np.dot(H, gt_mean), cov_meas, False, 1)
 
             # fusion methods ===========================================================================================
-            mmgw_mc_update(mmgw_mc[0], meas, cov_meas.copy(), N_PARTICLES_MMGW, gt, i, steps, plot_cond, save_path)
+            mmgw_mc_update(mmgw_mc[0], meas.copy(), cov_meas.copy(), N_PARTICLES_MMGW, gt, i, steps, plot_cond, save_path)
 
-            regular_update(regular[0], meas, cov_meas.copy(), gt, i, steps, plot_cond, save_path, False)
+            regular_update(regular[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, False)
 
-            regular_update(regular_mmgw[0], meas, cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
+            regular_update(regular_mmgw[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
 
-            red_update(red_mwdp[0], meas, cov_meas.copy(), gt, i, steps, plot_cond, save_path, False)
+            red_update(red_mmgw[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
 
-            red_update(red_mmgw[0], meas, cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
-
-            shape_mean_update(shape_mean[0], meas, cov_meas.copy(), gt, i, steps, plot_cond, save_path,
+            shape_mean_update(shape_mean[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path,
                               0.2 if cov_meas[AL, AL] < 0.1*np.pi else 5.0 if cov_meas[AL, AL] < 0.4*np.pi else 10.0)
+
+        plt.close(mmgw_mc[0]['figure'])
+        plt.close(regular[0]['figure'])
+        plt.close(regular_mmgw[0]['figure'])
+        plt.close(red_mmgw[0]['figure'])
+        plt.close(shape_mean[0]['figure'])
 
     mmgw_mc[0]['error'] = np.sqrt(mmgw_mc[0]['error'] / runs)
     regular[0]['error'] = np.sqrt(regular[0]['error'] / runs)
     regular_mmgw[0]['error'] = np.sqrt(regular_mmgw[0]['error'] / runs)
-    red_mwdp[0]['error'] = np.sqrt(red_mwdp[0]['error'] / runs)
     red_mmgw[0]['error'] = np.sqrt(red_mmgw[0]['error'] / runs)
     shape_mean[0]['error'] = np.sqrt(shape_mean[0]['error'] / runs)
 
     # error plotting ===================================================================================================
-    plot_error_bars(np.block([regular, regular_mmgw, shape_mean, mmgw_mc, red_mwdp, red_mmgw]), steps)
-    plot_convergence(np.block([regular, regular_mmgw, shape_mean, mmgw_mc, red_mwdp, red_mmgw]), steps, save_path)
+    plot_error_bars(np.block([regular, regular_mmgw, shape_mean, mmgw_mc, red_mmgw]), steps)
+    plot_convergence(np.block([regular, regular_mmgw, shape_mean, mmgw_mc, red_mmgw]), steps, save_path)
 
 
 def test_mean(orig, cov, n_particles, save_path):

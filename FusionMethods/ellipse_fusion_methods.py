@@ -61,7 +61,8 @@ def mmgw_mc_update(mmgw_mc, meas, cov_meas, n_particles, gt, step_id, steps, plo
                                                            meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
                                                            'MC Approximated Fusion',
                                                            save_path + 'exampleMCApprox%i.svg' % step_id,
-                                                           est_color='green')
+                                                           mmgw_mc['figure'], mmgw_mc['axes'],
+                                                           est_color=mmgw_mc['color'])
 
 
 def regular_update(regular, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw):
@@ -113,7 +114,9 @@ def regular_update(regular, meas, cov_meas, gt, step_id, steps, plot_cond, save_
                                                            regular['est'][AL], all_prior[M], all_prior[L], all_prior[W],
                                                            all_prior[AL], meas[M], meas[L], meas[W], meas[AL], gt[M],
                                                            gt[L], gt[W], gt[AL], plot_cond, regular['name'],
-                                                           save_path + 'example' + regular['name'] + '%i.svg' % step_id)
+                                                           save_path + 'example' + regular['name'] + '%i.svg' % step_id,
+                                                           regular['figure'], regular['axes'],
+                                                           est_color=regular['color'])
 
 
 def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw):
@@ -185,7 +188,8 @@ def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, us
                                                        prior[M], prior[L], prior[W], prior[AL], meas[M], meas[L],
                                                        meas[W], meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
                                                        red['name'],
-                                                       save_path + 'example' + red['name'] + '%i.svg' % step_id)
+                                                       save_path + 'example' + red['name'] + '%i.svg' % step_id,
+                                                       red['figure'], red['axes'], est_color=red['color'])
 
 
 def shape_mean_update(shape_mean, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, tau=1.0):
@@ -235,4 +239,5 @@ def shape_mean_update(shape_mean, meas, cov_meas, gt, step_id, steps, plot_cond,
                                                               meas[AL], gt[M], gt[L], gt[W], gt[AL], plot_cond,
                                                               shape_mean['name'],
                                                               save_path + 'example' + shape_mean['name'] + '%i.svg'
-                                                              % step_id)
+                                                              % step_id, shape_mean['figure'], shape_mean['axes'],
+                                                              est_color=shape_mean['color'])
