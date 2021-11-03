@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from numpy.linalg import norm
 from scipy.linalg import sqrtm
 from matplotlib.patches import Ellipse
+import tikzplotlib
 
 from FusionMethods.ellipse_fusion_support import rot_matrix, to_matrix
 
@@ -209,7 +210,8 @@ def plot_convergence(states, steps, save_path):
         plt.plot(np.arange(1, steps + 1), states[i]['error'][:steps], color=states[i]['color'], label=states[i]['name'])
     plt.legend()
     plt.xticks(np.arange(5, steps + 1, 5))
-    plt.savefig(save_path + 'errorCompGW.svg')
+    tikzplotlib.save(save_path + 'errorCompGW.tex', add_axis_environment=False)
+    # plt.savefig(save_path + 'errorCompGW.svg')
     plt.show()
 
     # plot SR distance
@@ -217,5 +219,6 @@ def plot_convergence(states, steps, save_path):
         plt.plot(np.arange(1, steps + 1), states[i]['error'][steps:], color=states[i]['color'], label=states[i]['name'])
     plt.legend()
     plt.xticks(np.arange(5, steps + 1, 5))
-    plt.savefig(save_path + 'errorCompSR.svg')
+    tikzplotlib.save(save_path + 'errorCompSR.tex', add_axis_environment=False)
+    # plt.savefig(save_path + 'errorCompSR.svg')
     plt.show()

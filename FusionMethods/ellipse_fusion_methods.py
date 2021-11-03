@@ -7,7 +7,8 @@ Contains various ellipse fusion methods
 import numpy as np
 
 from FusionMethods.ellipse_fusion_support import get_ellipse_params, get_ellipse_params_from_sr, to_matrix,\
-    single_particle_approx_gaussian, mmgw_estimate_from_particles, sample_m, turn_mult, reduce_mult, sample_mult
+    single_particle_approx_gaussian, mmgw_estimate_from_particles, sample_m, turn_mult, reduce_mult, sample_mult, \
+    reduce_mult_runnalls, reduce_mult_salmond
 from FusionMethods.error_and_plotting import error_and_plotting
 from FusionMethods.constants import *
 
@@ -119,21 +120,22 @@ def regular_update(regular, meas, cov_meas, gt, step_id, steps, plot_cond, save_
                                                            est_color=regular['color'])
 
 
-def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw):
+def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, use_mmgw, mixture_reduction='default', pruning=True):
     """
     Method utilizing RED. Fuses the four components of the RED with orientation between
     0 and 2pi with those of the measurement RED and applies mixture reduction on the resulting multi modal density. The
     mean of the density is estimated by taking the mean of the highest weighted component or by using the MMGW
     estimator.
-    :param red:         The state containing mean, covariance, etc.
-    :param meas:        Measurement
-    :param cov_meas:    Measurement covariance
-    :param gt:          Ground truth (for plotting and error calculation)
-    :param step_id:     Current step index (for plotting and error calculation)
-    :param steps:       Total number of steps
-    :param plot_cond:   Boolean for plotting the current time step
-    :param save_path:   Path to save the plots
-    :param use_mmgw:    Use the MMGW instead of the highest weight estimate
+    :param red:                 The state containing mean, covariance, etc.
+    :param meas:                Measurement
+    :param cov_meas:            Measurement covariance
+    :param gt:                  Ground truth (for plotting and error calculation)
+    :param step_id:             Current step index (for plotting and error calculation)
+    :param steps:               Total number of steps
+    :param plot_cond:           Boolean for plotting the current time step
+    :param save_path:           Path to save the plots
+    :param use_mmgw:            Use the MMGW instead of the highest weight estimate
+    :param mixture_reduction:   Mixture reduction approach, either default, salmond, or runnalls
     """
     # predict
     error_mat = np.array([
@@ -177,7 +179,14 @@ def red_update(red, meas, cov_meas, gt, step_id, steps, plot_cond, save_path, us
     post_weights -= np.log(np.sum(np.exp(post_weights)))
     post_weights = np.exp(post_weights)
 
-    red['x'], red['cov'], red['comp_weights'] = reduce_mult(post_mult, post_cov_mult, post_weights)
+    if mixture_reduction == 'runnalls':
+        red['x'], red['cov'], red['comp_weights'] = reduce_mult_runnalls(post_mult, post_cov_mult, post_weights)
+    elif mixture_reduction == 'salmond':
+        red['x'], red['cov'], red['comp_weights'] = reduce_mult_salmond(post_mult, post_cov_mult, post_weights, pruning)
+    else:
+        if mixture_reduction != 'default':
+            print('Invalid mixture reduction, switching to default!')
+        red['x'], red['cov'], red['comp_weights'] = reduce_mult(post_mult, post_cov_mult, post_weights)
     if use_mmgw:
         particles = sample_mult(post_mult, post_cov_mult, post_weights, N_PARTICLES_MMGW)
         red['est'] = mmgw_estimate_from_particles(particles)

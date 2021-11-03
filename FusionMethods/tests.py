@@ -5,11 +5,13 @@ Contains test cases for different ellipse fusion methods
 """
 
 import numpy as np
+import time
 
 from numpy.random import multivariate_normal as mvn
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
+import tikzplotlib
 
 from FusionMethods.ellipse_fusion_methods import mmgw_mc_update, regular_update, red_update, shape_mean_update
 from FusionMethods.ellipse_fusion_support import sample_m, get_ellipse_params, single_particle_approx_gaussian,\
@@ -65,10 +67,22 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
     red_mmgw[0]['error'] = error.copy()
     red_mmgw[0]['name'] = 'RED-MMGW'
     red_mmgw[0]['color'] = 'green'
+    # red_mmgw_r = np.zeros(1, dtype=state_dtype)
+    # red_mmgw_r[0]['error'] = error.copy()
+    # red_mmgw_r[0]['name'] = 'RED-MMGW-r'
+    # red_mmgw_r[0]['color'] = 'lightgreen'
+    # red_mmgw_s = np.zeros(1, dtype=state_dtype)
+    # red_mmgw_s[0]['error'] = error.copy()
+    # red_mmgw_s[0]['name'] = 'RED-MMGW-s'
+    # red_mmgw_s[0]['color'] = 'turquoise'
     shape_mean = np.zeros(1, dtype=state_dtype)
     shape_mean[0]['error'] = error.copy()
     shape_mean[0]['name'] = 'Shape-Mean'
     shape_mean[0]['color'] = 'magenta'
+
+    # rt_red = 0.0
+    # rt_red_r = 0.0
+    # rt_red_s = 0.0
 
     for r in range(runs):
         print('Run %i of %i' % (r+1, runs))
@@ -103,6 +117,18 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
         particles = sample_mult(red_mmgw[0]['x'], red_mmgw[0]['cov'], red_mmgw[0]['comp_weights'], N_PARTICLES_MMGW)
         red_mmgw[0]['est'] = mmgw_estimate_from_particles(particles)
         red_mmgw[0]['figure'], red_mmgw[0]['axes'] = plt.subplots(1, 1)
+
+        # red_mmgw_r[0]['x'], red_mmgw_r[0]['cov'], red_mmgw_r[0]['comp_weights'] = turn_mult(prior.copy(), cov_prior.copy())
+        # particles = sample_mult(red_mmgw_r[0]['x'], red_mmgw_r[0]['cov'], red_mmgw_r[0]['comp_weights'], N_PARTICLES_MMGW)
+        # red_mmgw_r[0]['est'] = mmgw_estimate_from_particles(particles)
+        # red_mmgw_r[0]['figure'], red_mmgw_r[0]['axes'] = plt.subplots(1, 1)
+        #
+        # red_mmgw_s[0]['x'], red_mmgw_s[0]['cov'], red_mmgw_s[0]['comp_weights'] = turn_mult(prior.copy(),
+        #                                                                                     cov_prior.copy())
+        # particles = sample_mult(red_mmgw_s[0]['x'], red_mmgw_s[0]['cov'], red_mmgw_s[0]['comp_weights'],
+        #                         N_PARTICLES_MMGW)
+        # red_mmgw_s[0]['est'] = mmgw_estimate_from_particles(particles)
+        # red_mmgw_s[0]['figure'], red_mmgw_s[0]['axes'] = plt.subplots(1, 1)
 
         # get prior for RM mean
         shape_mean[0]['x'] = prior[KIN]
@@ -146,7 +172,23 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
 
             regular_update(regular_mmgw[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
 
-            red_update(red_mmgw[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True)
+            # tic = time.time()
+            red_update(red_mmgw[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True,
+                       mixture_reduction='salmond')
+            # toc = time.time()
+            # rt_red += toc - tic
+
+            # tic = time.time()
+            # red_update(red_mmgw_r[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True,
+            #            mixture_reduction='salmond', pruning=False)
+            # toc = time.time()
+            # rt_red_r += toc - tic
+
+            # tic = time.time()
+            # red_update(red_mmgw_s[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path, True,
+            #            mixture_reduction='salmond')
+            # toc = time.time()
+            # rt_red_s += toc - tic
 
             shape_mean_update(shape_mean[0], meas.copy(), cov_meas.copy(), gt, i, steps, plot_cond, save_path,
                               0.2 if cov_meas[AL, AL] < 0.1*np.pi else 5.0 if cov_meas[AL, AL] < 0.4*np.pi else 10.0)
@@ -155,13 +197,24 @@ def test_convergence(steps, runs, prior, cov_prior, cov_meas, random_param, save
         plt.close(regular[0]['figure'])
         plt.close(regular_mmgw[0]['figure'])
         plt.close(red_mmgw[0]['figure'])
+        # plt.close(red_mmgw_r[0]['figure'])
+        # plt.close(red_mmgw_s[0]['figure'])
         plt.close(shape_mean[0]['figure'])
 
     mmgw_mc[0]['error'] = np.sqrt(mmgw_mc[0]['error'] / runs)
     regular[0]['error'] = np.sqrt(regular[0]['error'] / runs)
     regular_mmgw[0]['error'] = np.sqrt(regular_mmgw[0]['error'] / runs)
     red_mmgw[0]['error'] = np.sqrt(red_mmgw[0]['error'] / runs)
+    # red_mmgw_r[0]['error'] = np.sqrt(red_mmgw_r[0]['error'] / runs)
+    # red_mmgw_s[0]['error'] = np.sqrt(red_mmgw_s[0]['error'] / runs)
     shape_mean[0]['error'] = np.sqrt(shape_mean[0]['error'] / runs)
+
+    # print('Runtime RED:')
+    # print(rt_red / (runs*steps))
+    # print('Runtime RED no pruning:')
+    # print(rt_red_r / (runs * steps))
+    # print('Runtime RED-S:')
+    # print(rt_red_s / (runs * steps))
 
     # error plotting ===================================================================================================
     plot_error_bars(np.block([regular, regular_mmgw, shape_mean, mmgw_mc, red_mmgw]), steps)
@@ -275,31 +328,37 @@ def test_mean(orig, cov, n_particles, save_path):
     el_gt.set_alpha(0.7)
     el_gt.set_ec('red')
     ax.add_artist(el_gt)
+    plt.plot([0], [0], color='red', label='Euclidean')
 
     ela_final = Ellipse((vec_mat[X1], vec_mat[X2]), 2 * l_mat, 2 * w_mat, np.rad2deg(al_mat), fill=False,
                         linewidth=2.0)
     ela_final.set_alpha(0.7)
     ela_final.set_ec('magenta')
     ax.add_artist(ela_final)
+    plt.plot([0], [0], color='magenta', label='Shape mean')
 
     elb_final = Ellipse((vec_mmsr[X1], vec_mmsr[X2]), 2 * l_mmsr, 2 * w_mmsr, np.rad2deg(al_mmsr), fill=False,
                         linewidth=2.0)
     elb_final.set_alpha(0.7)
     elb_final.set_ec('lightgreen')
     ax.add_artist(elb_final)
+    plt.plot([0], [0], color='lightgreen', label='ESR')
 
     el_res = Ellipse((bary[X1], bary[X2]), 2 * l_mmgw, 2 * w_mmgw, np.rad2deg(al_mmgw), fill=False, linewidth=2.0,
                      linestyle='--')
     el_res.set_alpha(0.7)
-    el_res.set_ec('black')
+    el_res.set_ec('green')
     ax.add_artist(el_res)
+    plt.plot([0], [0], color='green', label='GW')
 
     plt.axis([-10 + orig[0], 10 + orig[0], -10 + orig[1], 10 + orig[1]])
     ax.set_aspect('equal')
     ax.set_title('MMSE Estimates')
     plt.xlabel('x in m')
     plt.ylabel('y in m')
-    plt.savefig(save_path + 'mmseEstimates.svg')
+    plt.legend()
+    tikzplotlib.save(save_path + 'mmseEstimates.tex', add_axis_environment=False)
+    # plt.savefig(save_path + 'mmseEstimates.svg')
     plt.show()
 
     # print error

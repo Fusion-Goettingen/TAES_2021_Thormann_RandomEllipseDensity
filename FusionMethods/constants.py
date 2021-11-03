@@ -24,7 +24,7 @@ N_PARTICLES_MMGW = 1000  # number of particles for mmgw estimation
 # for mixture reduction
 WEIGHT_THRESH = 1e-6  # weight threshold for discarding components
 MAX_COMP = 32  # maximum number of components; prune if necessary
-CLOSE_THRESH = 0.2
+CLOSE_THRESH = 0.05
 
 # motion model
 SIGMA_V1 = 0.1

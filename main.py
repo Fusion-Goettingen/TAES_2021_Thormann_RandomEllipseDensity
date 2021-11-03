@@ -28,7 +28,7 @@ cov_prior = np.array([
 cov_meas = np.array([
     [0.5, 0.0, 0,          0,     0,    0,    0],
     [0.0, 0.5, 0,          0,     0,    0,    0],
-    [0,   0,   0.5*np.pi, 0,     0,    0,    0],
+    [0,   0,   0.01*np.pi, 0,     0,    0,    0],
     [0,   0,   0,          0.5,   0,    0,    0],
     [0,   0,   0,          0,   0.1,    0,    0],
     [0,   0,   0,          0,     0, 0.05,    0],
@@ -42,4 +42,4 @@ save_path = './'
 
 # tests ================================================================================================================
 test_convergence(steps, runs, prior, cov_prior, cov_meas, True, save_path)
-# test_mean(prior, cov_prior, 1000, save_path)
+# test_mean(prior[:5], cov_prior[:5, :5], 1000, save_path)

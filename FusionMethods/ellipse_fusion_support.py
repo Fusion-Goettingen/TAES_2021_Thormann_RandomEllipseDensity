@@ -6,6 +6,7 @@ Contains support functions for the ellipse fusion and test setup
 
 import numpy as np
 from numpy.random import multivariate_normal as mvn
+from numpy.linalg import slogdet
 from scipy.linalg import sqrtm
 
 from sklearn.cluster import DBSCAN
@@ -304,6 +305,159 @@ def reduce_mult(means, covs, w):
     w_merged /= np.sum(w_merged)
 
     return means_merged, covs_merged, w_merged
+
+
+def reduce_mult_salmond(means, covs, w, pruning=True):
+    """
+    Reduce mixture density by removing unlikely components and merging close components based on
+    Salmond, D. J. "Mixture reduction algorithms for point and extended object tracking in clutter." IEEE Transactions
+    on Aerospace and Electronic Systems 45.2 (2009): 667-686.
+    :param means:   set of means
+    :param covs:    set of covariances
+    :param w:       weights of the components
+    :return:        reduced set of component means, covariances, and weights
+    """
+    if len(means.shape) == 2:
+        x_dim = len(means[0])
+    else:
+        x_dim = len(means)
+    means_merged, covs_merged, w_merged = means.copy(), covs.copy(), w.copy()
+
+    if pruning:
+        # remove unlikely components
+        keep = np.atleast_1d(w_merged > WEIGHT_THRESH)
+        if not any(keep):  # keep most likely component as we assume the target always exists
+            keep[np.argmax(w_merged)] = True
+            means_merged, covs_merged, w_merged = means_merged[keep], covs_merged[keep], w_merged[keep]
+            w_merged /= np.sum(w_merged)
+            return means_merged, covs_merged, w_merged
+        means_merged = means_merged[keep]
+        covs_merged = covs_merged[keep]
+        w_merged = w_merged[keep]
+        w_merged /= np.sum(w_merged)
+
+    num = len(w_merged)
+
+    # merging
+    close_thresh = CLOSE_THRESH
+    while num > MAX_COMP:
+        # cluster
+        clusters = np.ones(num) * -1  # -1 means unclustered
+        cluster_id = 0
+        while any(clusters == -1):
+            central_id = np.arange(num)[clusters == -1][np.argmax(w_merged[clusters == -1])]
+            clusters[central_id] = cluster_id
+            for i in np.arange(num)[clusters == -1]:
+                dist = (w_merged[central_id]*w_merged[i] / (w_merged[central_id] + w_merged[i])) \
+                       * ((means_merged[i] - means_merged[central_id]) @ np.linalg.inv(covs_merged[central_id])# + covs_merged[i])
+                          @ (means_merged[i] - means_merged[central_id]))
+                if dist < close_thresh:
+                    clusters[i] = cluster_id
+            cluster_id += 1
+
+        # merge
+        labels = np.arange(cluster_id)
+        new_means_merged = np.zeros((cluster_id, x_dim))
+        new_covs_merged = np.zeros((cluster_id, x_dim, x_dim))
+        new_w_merged = np.zeros(cluster_id)
+        for i in range(len(labels)):
+            in_cluster = (clusters == i)
+            if np.sum(in_cluster) > 1:
+                new_w_merged[i] = np.sum(w_merged[in_cluster])
+                new_means_merged[i] = np.sum(w_merged[in_cluster, None] * means_merged[in_cluster], axis=0) \
+                                      / new_w_merged[i]
+                new_covs_merged[i] = np.sum(w_merged[in_cluster, None, None]
+                                        * (np.einsum('xa, xb -> xab', means_merged[in_cluster] - new_means_merged[i],
+                                                     means_merged[in_cluster] - new_means_merged[i])
+                                           + covs_merged[in_cluster]), axis=0) / new_w_merged[i]
+            else:
+                new_w_merged[i] = w_merged[in_cluster]
+                new_means_merged[i] = means_merged[in_cluster]
+                new_covs_merged[i] = covs_merged[in_cluster]
+        new_w_merged /= np.sum(new_w_merged)
+
+        means_merged = new_means_merged.copy()
+        covs_merged = new_covs_merged.copy()
+        w_merged = new_w_merged.copy()
+        num = len(w_merged)
+
+        close_thresh += 0.05
+
+    return means_merged, covs_merged, w_merged
+
+
+def reduce_mult_runnalls(means, covs, w):
+    """
+    Reduce mixture density based on Runnalls' algorithm.
+    :param means:   set of means
+    :param covs:    set of covariances
+    :param w:       weights of the components
+    :return:        reduced set of component means, covariances, and weights
+    """
+    means_merged, covs_merged, w_merged = means.copy(), covs.copy(), w.copy()
+    num = len(w_merged)
+
+    # create cost matrix
+    cost = np.array([[get_cost(w_merged, means_merged, covs_merged, i, j) for j in range(num)] for i in range(num)])
+
+    while num > MAX_COMP:
+        min_id = np.argmin(cost)
+        i = int(np.floor(min_id / num))
+        j = min_id % num
+
+        # save merged result at position i
+        w_merged[i], means_merged[i], covs_merged[i] = merge_two(w_merged, means_merged, covs_merged, i, j)
+
+        # update cost matrix
+        cost[i, :] = [get_cost(w_merged, means_merged, covs_merged, i, k) for k in range(num)]
+        cost[:, i] = cost[i, :]
+
+        # remove j
+        w_merged = np.delete(w_merged, j)
+        means_merged = np.delete(means_merged, j, axis=0)
+        covs_merged = np.delete(covs_merged, j, axis=0)
+        cost = np.delete(cost, j, axis=0)
+        cost = np.delete(cost, j, axis=1)
+        num -= 1
+
+    return means_merged, covs_merged, w_merged
+
+
+def get_cost(w_merged, means_merged, covs_merged, i, j):
+    """
+    Get cost of merging. No merging with itself, so return infinite for i==j.
+    :param w_merged:        weights
+    :param means_merged:    means
+    :param covs_merged:     covariances
+    :param i:               ID of first component to be merged
+    :param j:               ID of second component to be merged
+    :return:                cost
+    """
+    if i == j:
+        return np.inf
+
+    w_ij, mean_ij, p_ij = merge_two(w_merged, means_merged, covs_merged, i, j)
+    return 0.5 * ((w_merged[i] + w_merged[j]) * slogdet(p_ij)[1] - w_merged[i] * slogdet(covs_merged[i])[1]
+                  - w_merged[j] * slogdet(covs_merged[j])[1])
+
+
+def merge_two(w_merged, means_merged, covs_merged, i, j):
+    """
+    Merge two components indicated by i and j.
+    :param w_merged:        weights
+    :param means_merged:    means
+    :param covs_merged:     covariances
+    :param i:               ID of first component to be merged
+    :param j:               ID of second component to be merged
+    :return:                weight, mean, and covariance of merged components
+    """
+    w_ij = w_merged[i] + w_merged[j]
+    mean_ij = (w_merged[i] * means_merged[i] + w_merged[j] * means_merged[j]) / w_ij
+    p_ij = (w_merged[i] * (covs_merged[i] + np.outer(means_merged[i] - mean_ij, means_merged[i] - mean_ij))
+            + w_merged[j] * (covs_merged[j] + np.outer(means_merged[j] - mean_ij, means_merged[j] - mean_ij))) \
+           / w_ij
+
+    return w_ij, mean_ij, p_ij
 
 
 def barycenter(particles, w, n_particles, particles_sr=np.zeros(0)):
